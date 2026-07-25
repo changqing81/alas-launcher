@@ -416,6 +416,7 @@ fn clean_uv_cache() -> Result<()> {
     let status = Command::new(&uv)
         .args(["cache", "clean"])
         .env("UV_NO_PROGRESS", "1")
+        .env_remove("UV_PYTHON")
         .create_no_window()
         .status()
         .with_context(|| {
@@ -849,12 +850,7 @@ fn uv_sync_project(
 
         info!("Syncing dependencies with PyPI index: {index}");
         remove_uv_lock_for_resolve()?;
-        let mut cmd = Command::new(&bootstrap_uv);
-        cmd.args(["sync", "--no-dev", "--no-install-project"])
-            .args(["--default-index", index])
-            .env("UV_NO_PROGRESS", "1")
-            .env("UV_PYTHON_INSTALL_DIR", venv_python_install_dir());
-        ignore_uv_index_env(&mut cmd);
+        let mut cmd = uv_sync_command(&bootstrap_uv, index);
 
         match run_command(
             &mut cmd,
@@ -875,6 +871,32 @@ fn uv_sync_project(
     }
 
     Err(last_error.unwrap_or_else(|| anyhow!(t!("setup.deps_failed").to_string())))
+}
+
+fn uv_sync_command(bootstrap_uv: &Path, index: &str) -> Command {
+    uv_sync_command_with_paths(
+        bootstrap_uv,
+        &venv_python(),
+        &venv_python_install_dir(),
+        index,
+    )
+}
+
+fn uv_sync_command_with_paths(
+    bootstrap_uv: &Path,
+    python: &Path,
+    python_install_dir: &Path,
+    index: &str,
+) -> Command {
+    let mut cmd = Command::new(bootstrap_uv);
+    cmd.args(["sync", "--no-dev", "--no-install-project", "--python"])
+        .arg(python)
+        .args(["--default-index", index])
+        .env("UV_NO_PROGRESS", "1")
+        .env("UV_PYTHON_INSTALL_DIR", python_install_dir);
+    uv_python_env_with_install_dir(&mut cmd, python_install_dir);
+    ignore_uv_index_env(&mut cmd);
+    cmd
 }
 
 fn remove_uv_lock_for_resolve() -> Result<()> {
@@ -1275,8 +1297,13 @@ fn ensure_deploy_python_dependencies(
 }
 
 fn uv_python_env(cmd: &mut Command) {
+    uv_python_env_with_install_dir(cmd, &venv_python_install_dir());
+}
+
+fn uv_python_env_with_install_dir(cmd: &mut Command, python_install_dir: &Path) {
     cmd.env("UV_NO_PROGRESS", "1")
-        .env("UV_PYTHON_INSTALL_DIR", venv_python_install_dir());
+        .env_remove("UV_PYTHON")
+        .env("UV_PYTHON_INSTALL_DIR", python_install_dir);
     if std::env::var_os("UV_PYTHON_INSTALL_MIRROR").is_none() {
         cmd.env(
             "UV_PYTHON_INSTALL_MIRROR",
@@ -1857,5 +1884,39 @@ mod tests {
         assert_eq!(Some(25), git_section_progress("FETCH REPOSITORY BRANCH"));
         assert_eq!(Some(58), git_section_progress("PULL REPOSITORY BRANCH"));
         assert_eq!(Some(63), git_section_progress("SHOW VERSION"));
+    }
+
+    #[test]
+    fn test_uv_sync_uses_managed_python() {
+        let python = Path::new(".venv/Scripts/python.exe");
+        let command = uv_sync_command_with_paths(
+            Path::new("uv"),
+            python,
+            Path::new(".venv/python"),
+            "https://pypi.org/simple",
+        );
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(
+            args[0..4],
+            ["sync", "--no-dev", "--no-install-project", "--python"]
+        );
+        assert_eq!(args[4], python.to_string_lossy());
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--default-index", "https://pypi.org/simple"]));
+    }
+
+    #[test]
+    fn test_uv_commands_ignore_global_python_selection() {
+        let mut command = Command::new("uv");
+        uv_python_env_with_install_dir(&mut command, Path::new(".venv/python"));
+
+        assert!(command
+            .get_envs()
+            .any(|(key, value)| key == "UV_PYTHON" && value.is_none()));
     }
 }
