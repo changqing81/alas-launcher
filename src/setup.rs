@@ -82,7 +82,8 @@ struct GitProgressState {
 const MAX_UPDATE_RETRIES: usize = 20;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 const CLEANUP_RETRIES: usize = 20;
-const PYTHON_VERSION: &str = "3.14.3";
+const PYTHON_VERSION: &str = "3.14.6";
+const MIN_REUSABLE_VENV_PYTHON_VERSION: (u16, u16, u16) = (3, 14, 5);
 const DEFAULT_UV_PYTHON_INSTALL_MIRRORS: &[&str] = &[
     "https://registry.npmmirror.com/-/binary/python-build-standalone/",
     "https://mirror.nju.edu.cn/github-release/astral-sh/python-build-standalone/",
@@ -1333,7 +1334,31 @@ fn ensure_self_contained_python(
         t!("setup.checking_python_version", version = PYTHON_VERSION),
         10,
     ));
-    if venv_python_works() && managed_python_executable().is_some() {
+    let existing_venv_python_version = venv_python_version();
+    if let Some(version) = existing_venv_python_version
+        .filter(|version| venv_python_version_requires_rebuild(*version))
+    {
+        let venv = venv_dir();
+        info!(
+            "Removing virtual environment with Python {}.{}.{}; minimum reusable version is {}.{}.{}",
+            version.0,
+            version.1,
+            version.2,
+            MIN_REUSABLE_VENV_PYTHON_VERSION.0,
+            MIN_REUSABLE_VENV_PYTHON_VERSION.1,
+            MIN_REUSABLE_VENV_PYTHON_VERSION.2,
+        );
+        remove_runtime_entry_with_retry(&venv).with_context(|| {
+            t!(
+                "errors.reset_venv_failed",
+                error = venv.display().to_string()
+            )
+        })?;
+    }
+
+    if existing_venv_python_version.is_some_and(is_reusable_venv_python_version)
+        && managed_python_executable().is_some()
+    {
         return Ok(());
     }
 
@@ -1479,20 +1504,42 @@ fn managed_python_executable() -> Option<PathBuf> {
     None
 }
 
-fn venv_python_works() -> bool {
+fn venv_python_version() -> Option<(u16, u16, u16)> {
     let python = venv_python();
     if !python.exists() {
-        return false;
+        return None;
     }
-    Command::new(python)
+    let output = Command::new(python)
         .args([
             "-c",
-            "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)",
+            "import sys; print('.'.join(map(str, sys.version_info[:3])))",
         ])
         .create_no_window()
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_python_version(std::str::from_utf8(&output.stdout).ok()?)
+}
+
+fn parse_python_version(version: &str) -> Option<(u16, u16, u16)> {
+    let mut components = version.trim().split('.');
+    let major = components.next()?.parse().ok()?;
+    let minor = components.next()?.parse().ok()?;
+    let patch = components.next()?.parse().ok()?;
+    if components.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+fn venv_python_version_requires_rebuild(version: (u16, u16, u16)) -> bool {
+    version < MIN_REUSABLE_VENV_PYTHON_VERSION
+}
+
+fn is_reusable_venv_python_version(version: (u16, u16, u16)) -> bool {
+    version.0 == 3 && version.1 == 14 && !venv_python_version_requires_rebuild(version)
 }
 
 fn copy_file_if_exists(from: &Path, to: &Path) -> Result<()> {
@@ -1918,5 +1965,24 @@ mod tests {
         assert!(command
             .get_envs()
             .any(|(key, value)| key == "UV_PYTHON" && value.is_none()));
+    }
+
+    #[test]
+    fn test_parse_python_version() {
+        assert_eq!(parse_python_version("3.14.5"), Some((3, 14, 5)));
+        assert_eq!(parse_python_version(" 3.14.6\n"), Some((3, 14, 6)));
+        assert_eq!(parse_python_version("3.14"), None);
+        assert_eq!(parse_python_version("3.14.5.1"), None);
+        assert_eq!(parse_python_version("not a version"), None);
+    }
+
+    #[test]
+    fn test_venv_python_version_compatibility() {
+        assert!(venv_python_version_requires_rebuild((3, 14, 4)));
+        assert!(!venv_python_version_requires_rebuild((3, 14, 5)));
+        assert!(!venv_python_version_requires_rebuild((3, 14, 6)));
+        assert!(is_reusable_venv_python_version((3, 14, 5)));
+        assert!(is_reusable_venv_python_version((3, 14, 6)));
+        assert!(!is_reusable_venv_python_version((3, 15, 0)));
     }
 }
