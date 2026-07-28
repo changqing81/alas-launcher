@@ -28,7 +28,7 @@ dependencies = [
 
 [[package]]
 name = "alas-launcher"
-version = "2.1.6"
+version = "2.1.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -53,6 +53,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-single-instance",
  "tauri-winrt-notification",
+ "tempfile",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

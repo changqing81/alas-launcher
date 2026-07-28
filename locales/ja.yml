@@ -69,6 +69,7 @@ launcher_update:
   updating: "ランチャーを更新中"
   status: "ランチャーを更新中"
   available_detail: "ランチャーの新バージョン %{version} が見つかりました。ダウンロードを準備中です。"
+  parallel_downloading_detail: "%{connections} 接続でダウンロード中です。"
   downloading_detail: "%{downloaded} / %{total}（%{percent}%）をダウンロード済み、速度 %{speed}/s。"
   downloading_detail_unknown: "%{downloaded} をダウンロード済み、速度 %{speed}/s。"
   verifying_detail: "ダウンロードが完了しました。更新ファイルを検証中です。"
@@ -77,9 +78,10 @@ launcher_update:
   restart_status: "再起動を準備中..."
   failed: "ランチャーの更新に失敗しました"
   failed_detail: "ランチャーの更新が完了するまで、実行環境の修復は行いません。\n\n%{error}"
-  mini_check_failed: "ミニ版ランチャーは先に完全版へ更新する必要がありますが、更新を確認できませんでした：%{error}"
+  check_failed: "ランチャーの更新を確認できないため、起動を続行できません：%{error}"
+  invalid_manifest_version: "更新サーバーから無効なランチャーバージョンが返されました：%{version}"
   mini_update_missing: "ミニ版ランチャーは先に完全版へ更新する必要がありますが、更新サーバーからより新しいバージョンが返されませんでした。現在：%{current}、最新：%{latest}"
-  mini_payload_missing: "ミニ版ランチャーは先に完全版へ更新する必要がありますが、%{platform} 用のランチャーパッケージがありません。"
+  payload_missing: "ランチャーの更新が必要ですが、%{platform} 用のパッケージがありません。"
 
 dialog:
   cleaning_env: "環境をクリーンアップ中"
