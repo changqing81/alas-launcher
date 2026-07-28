@@ -14,8 +14,7 @@ use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc::{self, RecvTimeoutError, Sender},
-    Arc,
-};
+    Arc,};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
@@ -249,6 +248,60 @@ fn bootstrap_uv_path() -> Result<PathBuf> {
         }
     }
     Ok(path)
+}
+
+fn extract_uv_version(output: &str) -> Option<String> {
+    for line in output.lines() {
+        let line = line.trim();
+        if line.starts_with("uv ") {
+            let version = line.strip_prefix("uv ")?;
+            if !version.is_empty() {
+                return Some(version.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn get_uv_version(uv_path: &Path) -> Option<String> {
+    let output = Command::new(uv_path)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        extract_uv_version(&stdout)
+    } else {
+        None
+    }
+}
+
+fn ensure_uv_synced(bootstrap_uv: &Path, target_uv: &Path) -> Result<()> {
+    if !target_uv.exists() {
+        return Ok(());
+    }
+
+    let bootstrap_version = get_uv_version(bootstrap_uv);
+    let target_version = get_uv_version(target_uv);
+
+    match (&bootstrap_version, &target_version) {
+        (Some(bv), Some(tv)) if bv == tv => {
+            info!("UV version {} already up to date", bv);
+            return Ok(());
+        }
+        (Some(bv), Some(tv)) => {
+            info!(
+                "Updating UV from {} to {}",
+                tv, bv
+            );
+        }
+        _ => {
+            info!("UV version check skipped, performing copy");
+        }
+    }
+
+    copy_file_if_exists(bootstrap_uv, target_uv)?;
+    Ok(())
 }
 
 fn find_on_path(executable: &str) -> Option<PathBuf> {
@@ -1062,7 +1115,7 @@ fn ensure_runtime_tools(
         t!("setup.copying_tools"),
         16,
     ));
-    copy_file_if_exists(bootstrap_uv, &venv_uv())?;
+    ensure_uv_synced(bootstrap_uv, &venv_uv())?;
     ensure_adb_in_venv()?;
     ensure_git_in_venv()?;
     Ok(())

@@ -6,7 +6,7 @@ Deploy:
     # [CN user] Use 'git://git.pull/AzurPilot' for faster and more stable download
     # [其他用户] 使用 'https://github.com/wess09/AzurPilot'
     # [Other] Use 'https://github.com/wess09/AzurPilot'
-    Repository: git://git.pull/AzurPilot
+    Repository: https://gitcode.com/gcw_BYvq9jGu/AzurPilot
     # AzurPilot 分支
     # Branch of AzurPilot
     # [开发者] 使用 'dev'、'app' 等分支体验新功能
@@ -35,7 +35,7 @@ Deploy:
     # Update AzurPilot at startup
     # [大多数情况] 使用 true
     # [In most cases] Use true
-    AutoUpdate: true
+    AutoUpdate: false
 
   Python:
     # Python 可执行文件路径
@@ -120,7 +120,7 @@ Deploy:
     # Use auto update and builtin updater feature
     # 可能会引发问题 https://github.com/wess09/AzurPilot/issues/876
     # This may cause problem https://github.com/wess09/AzurPilot/issues/876
-    EnableReload: true
+    EnableReload: false
     # 每隔 X 分钟检查更新
     # Check update every X minute
     # [禁用] 0
@@ -138,7 +138,7 @@ Deploy:
     # [Disable] null
     # [默认] 08:00
     # [Default] 08:00
-    AutoRestartTime: 08:00
+    AutoRestartTime: null
 
   Misc:
     # 启用 Discord 富状态展示
