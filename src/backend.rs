@@ -1,7 +1,9 @@
 use std::{
     collections::BTreeSet,
+    fs::{self, OpenOptions},
     net::TcpStream,
-    process::{Command, ExitStatus},
+    path::{Path, PathBuf},
+    process::{Command, ExitStatus, Stdio},
     thread::sleep,
     time::Duration,
 };
@@ -145,17 +147,23 @@ pub struct ManagedBackend {
     child: Option<GroupChild>,
 }
 
+const BACKEND_OUTPUT_LIMIT: usize = 32 * 1024;
+
 impl ManagedBackend {
     pub fn new(config: &WebuiLaunchConfig) -> Result<Self> {
         std::env::set_var("ALAS_LAUNCHER_PID", format!("{}", std::process::id()));
         kill_processes_using_port(config.port)?;
 
-        let child = Command::new(venv_python())
+        let output_path = backend_output_path();
+        let output_file = prepare_backend_output(&output_path)?;
+        let error_file = output_file.try_clone()?;
+        let mut command = Command::new(venv_python());
+        command
             .args(config.args())
-            .group()
-            .create_no_window()
-            .spawn()?;
-        let res = Self { child: Some(child) };
+            .stdout(Stdio::from(output_file))
+            .stderr(Stdio::from(error_file));
+        let child = command.group().create_no_window().spawn()?;
+        let mut res = Self { child: Some(child) };
 
         let address = format!("127.0.0.1:{}", config.port).parse().unwrap();
         let start_time = std::time::Instant::now();
@@ -163,11 +171,22 @@ impl ManagedBackend {
             if TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok() {
                 return Ok(res);
             }
+            if let Some(child) = res.child.as_mut() {
+                if let Some(status) = child.try_wait()? {
+                    return Err(anyhow!(
+                        "gui.py exited before port {} became ready (status: {}).\n{}",
+                        config.port,
+                        status,
+                        format_backend_output(&output_path),
+                    ));
+                }
+            }
             sleep(Duration::from_millis(100));
         }
         Err(anyhow!(
-            "Timeout waiting for port {} to be ready",
-            config.port
+            "Timeout waiting for port {} to be ready.\n{}",
+            config.port,
+            format_backend_output(&output_path)
         ))
     }
 
@@ -194,6 +213,36 @@ impl ManagedBackend {
     }
 }
 
+fn backend_output_path() -> PathBuf {
+    PathBuf::from("log").join("launcher_backend_output.log")
+}
+
+fn prepare_backend_output(path: &Path) -> Result<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)?)
+}
+
+fn format_backend_output(path: &Path) -> String {
+    match fs::read(path) {
+        Ok(bytes) if bytes.is_empty() => "gui.py produced no diagnostic output.".to_owned(),
+        Ok(bytes) => {
+            let start = bytes.len().saturating_sub(BACKEND_OUTPUT_LIMIT);
+            let captured = String::from_utf8_lossy(&bytes[start..]);
+            format!(
+                "gui.py output (last 32 KiB):\n{}",
+                captured.trim_end_matches(['\r', '\n'])
+            )
+        }
+        Err(error) => format!("Unable to read gui.py diagnostic output: {error}"),
+    }
+}
+
 fn kill_processes_using_port(port: u16) -> Result<()> {
     let pids = match pids_using_tcp_port(port) {
         Ok(pids) => pids,
@@ -207,6 +256,7 @@ fn kill_processes_using_port(port: u16) -> Result<()> {
     }
 
     let current_pid = std::process::id();
+    let repo_dir = std::env::current_dir()?.canonicalize()?;
     let sys = sysinfo::System::new_all();
     for pid in pids {
         if pid == 0 || pid == current_pid {
@@ -216,6 +266,18 @@ fn kill_processes_using_port(port: u16) -> Result<()> {
         let sys_pid = sysinfo::Pid::from_u32(pid);
         match sys.process(sys_pid) {
             Some(process) => {
+                let belongs_to_runtime = process
+                    .exe()
+                    .and_then(|exe| exe.canonicalize().ok())
+                    .is_some_and(|exe| exe.starts_with(&repo_dir));
+                if !belongs_to_runtime {
+                    return Err(anyhow!(
+                        "Configured WebUI port {} is already used by unrelated process {} ({}); refusing to terminate it",
+                        port,
+                        pid,
+                        process.name().to_string_lossy(),
+                    ));
+                }
                 info!(
                     "Killing process {} ({}) using configured WebUI port {}",
                     pid,
@@ -326,5 +388,22 @@ impl Drop for ManagedBackend {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_backend_output_preserves_non_utf8_diagnostics() {
+        let path = std::env::temp_dir().join(format!(
+            "alas-launcher-backend-output-test-{}.log",
+            std::process::id()
+        ));
+        fs::write(&path, b"error: \xff\r\n").unwrap();
+        let output = format_backend_output(&path);
+        let _ = fs::remove_file(path);
+        assert_eq!("gui.py output (last 32 KiB):\nerror: \u{fffd}", output);
     }
 }
