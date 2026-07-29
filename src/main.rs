@@ -30,12 +30,12 @@ use std::{
 };
 
 use crate::{
-    backend::{ManagedBackend, WebuiLaunchConfig},
+    backend::{is_backend_startup_timeout, ManagedBackend, WebuiLaunchConfig},
     launcher_control::start_launcher_control_stream,
     notify::{start_notify_stream, NotificationClickHandler},
     setup::{
-        cleanup_runtime_for_rebuild, get_deploy_config, setup_alas_repo, setup_environment,
-        SplashUpdate,
+        cleanup_runtime_for_rebuild, get_deploy_config, rebuild_venv_and_sync_dependencies,
+        setup_alas_repo, setup_environment, SplashUpdate,
     },
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -88,6 +88,8 @@ const TIME_BOMB_CONFIG_SOURCE: &str = include_str!("../Cargo.toml");
 #[cfg(test)]
 const TAURI_CONFIG_SOURCE: &str = include_str!("../tauri.conf.json");
 const LAUNCHER_UPDATE_URL: &str = env!("LAUNCHER_UPDATE_URL");
+const LAUNCHER_UPDATE_FALLBACK_URL: &str =
+    "https://ap.launcher-update.nanoda.work/updata/stable.json";
 const LAUNCHER_UPDATE_SKIP_ENV: &str = "AZURPILOT_SKIP_LAUNCHER_UPDATE";
 const MINI_LAUNCHER_VERSION: &str = "0.0.1";
 const LAUNCHER_UPDATE_MTLS_IDENTITY: &[u8] =
@@ -319,6 +321,7 @@ fn time_bomb_expiration_message() -> Result<Option<String>> {
 fn fetch_network_time(url: &str) -> Result<DateTime<Utc>> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
+        .no_proxy()
         .build()?;
     let response = client.get(url).send()?;
     let date_header = response
@@ -364,6 +367,60 @@ fn launcher_update_http_client(
     Ok(builder.build()?)
 }
 
+fn fetch_launcher_update_manifest(client: &Client) -> Result<LauncherUpdateManifest> {
+    fetch_launcher_update_manifest_from_urls(
+        client,
+        &[LAUNCHER_UPDATE_URL, LAUNCHER_UPDATE_FALLBACK_URL],
+    )
+}
+
+fn fetch_launcher_update_manifest_from_urls(
+    client: &Client,
+    urls: &[&str],
+) -> Result<LauncherUpdateManifest> {
+    let mut failures = Vec::new();
+
+    for (index, url) in urls.iter().enumerate() {
+        if urls[..index].iter().any(|previous| previous == url) {
+            continue;
+        }
+
+        match fetch_launcher_update_manifest_from_url(client, url) {
+            Ok(manifest) => {
+                if index > 0 {
+                    info!("Using fallback launcher update manifest: {url}");
+                }
+                return Ok(manifest);
+            }
+            Err(error) => {
+                warn!("Unable to fetch launcher update manifest from {url}: {error:#}");
+                failures.push(format!("{url}: {error:#}"));
+            }
+        }
+    }
+
+    bail!(
+        "Unable to fetch launcher update manifest from all configured URLs: {}",
+        failures.join("; ")
+    )
+}
+
+fn fetch_launcher_update_manifest_from_url(
+    client: &Client,
+    url: &str,
+) -> Result<LauncherUpdateManifest> {
+    let manifest_text = client
+        .get(url)
+        .send()
+        .with_context(|| format!("request launcher update manifest from {url}"))?
+        .error_for_status()
+        .with_context(|| format!("validate launcher update manifest response from {url}"))?
+        .text()
+        .with_context(|| format!("read launcher update manifest from {url}"))?;
+    serde_json::from_str(&manifest_text)
+        .with_context(|| format!("parse launcher update manifest from {url}"))
+}
+
 fn launcher_version_is_mini(version: &str) -> bool {
     version.strip_prefix('v').unwrap_or(version) == MINI_LAUNCHER_VERSION
 }
@@ -388,26 +445,9 @@ fn check_launcher_update_and_restart(mut status_updater: impl FnMut(SplashUpdate
             )));
         }
     };
-    let manifest_text = match (|| -> Result<String> {
-        Ok(manifest_client
-            .get(LAUNCHER_UPDATE_URL)
-            .send()?
-            .error_for_status()?
-            .text()?)
-    })() {
-        Ok(text) => text,
-        Err(err) => {
-            warn!("Unable to fetch launcher update manifest: {err:#}");
-            return Err(anyhow!(t!(
-                "launcher_update.check_failed",
-                error = format!("{err:#}")
-            )));
-        }
-    };
-    let manifest: LauncherUpdateManifest = match serde_json::from_str(&manifest_text) {
+    let manifest = match fetch_launcher_update_manifest(&manifest_client) {
         Ok(manifest) => manifest,
         Err(err) => {
-            warn!("Unable to parse launcher update manifest: {err:#}");
             return Err(anyhow!(t!(
                 "launcher_update.check_failed",
                 error = format!("{err:#}")
@@ -1384,6 +1424,30 @@ mod tests {
     }
 
     #[test]
+    fn test_splash_includes_optional_uv_progress() {
+        let html = splash_redesigned_shell_html("video", "font");
+
+        assert!(html.contains("id=\"uv-progress-container\""));
+        assert!(html.contains("payload.uv_progress"));
+        assert!(html.contains("id=\"uv-progress-detail\""));
+    }
+
+    #[test]
+    fn test_truncate_log_file_replaces_existing_contents() {
+        let temp_dir = TempDirBuilder::new()
+            .prefix("launcher-log-truncate-test-")
+            .tempdir()
+            .expect("create temporary log directory");
+        let filename = "launcher.txt";
+        let path = temp_dir.path().join(filename);
+        fs::write(&path, "old launcher log").expect("write old log");
+
+        truncate_log_file(temp_dir.path(), filename).expect("truncate launcher log");
+
+        assert_eq!(fs::read(&path).expect("read truncated log"), b"");
+    }
+
+    #[test]
     fn test_titlebars_use_webview_draggable_regions_for_touch_dragging() {
         let splash_html = splash_redesigned_shell_html("video", "font");
 
@@ -1433,6 +1497,7 @@ mod tests {
             assert!(args.contains("msWebView2EnableDraggableRegions"));
             assert!(args.contains("ElasticOverscroll"));
             assert!(args.contains("msWebOOUI,msPdfOOUI,msSmartScreenProtection"));
+            assert!(args.contains("--no-proxy-server"));
         }
     }
 
@@ -1446,6 +1511,60 @@ mod tests {
         assert_eq!(launcher_version_is_newer("2.1.6", "not-a-version"), None);
         assert_eq!(launcher_version_is_newer("2.1", "2.1.7"), None);
         assert_eq!(launcher_version_is_newer("2.1.6", "2.1.7-"), None);
+    }
+
+    #[test]
+    fn test_launcher_update_manifest_uses_fallback_url() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let server = std::thread::spawn(move || {
+            let fallback_body = r#"{"version":"2.1.8","platforms":{}}"#;
+            let responses = [
+                (
+                    "/primary",
+                    "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_owned(),
+                ),
+                (
+                    "/fallback",
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{fallback_body}",
+                        fallback_body.len()
+                    ),
+                ),
+            ];
+
+            for (expected_path, response) in responses {
+                let (mut stream, _) = listener.accept().expect("accept manifest request");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("set read timeout");
+                let mut request = Vec::new();
+                loop {
+                    let mut buffer = [0u8; 1024];
+                    let read = stream.read(&mut buffer).expect("read manifest request");
+                    assert!(read > 0, "manifest request ended before headers");
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&request);
+                assert!(request.starts_with(&format!("GET {expected_path} ")));
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write manifest response");
+            }
+        });
+
+        let client = Client::builder().no_proxy().build().expect("build client");
+        let primary = format!("http://{address}/primary");
+        let fallback = format!("http://{address}/fallback");
+        let manifest = fetch_launcher_update_manifest_from_urls(&client, &[&primary, &fallback])
+            .expect("fetch manifest from fallback");
+
+        assert_eq!(manifest.version, "2.1.8");
+        server.join().expect("manifest server completed");
     }
 
     #[test]
@@ -2023,11 +2142,58 @@ fn main() -> Result<()> {
                                 crate::setup::get_tip()
                             )),
                         );
-                        let b = match ManagedBackend::new(&webui_config) {
+                        let mut backend_recovery_used = false;
+                        let backend_result = loop {
+                            match ManagedBackend::new(&webui_config) {
+                                Ok(backend) => break Ok(backend),
+                                Err(error)
+                                    if !backend_recovery_used
+                                        && is_backend_startup_timeout(&error) =>
+                                {
+                                    backend_recovery_used = true;
+                                    if setup_cancel_requested.load(Ordering::SeqCst) {
+                                        break Err(error);
+                                    }
+
+                                    warn!(
+                                        "Backend startup timed out; rebuilding .venv and retrying once"
+                                    );
+                                    if let Err(recovery_error) = rebuild_venv_and_sync_dependencies(
+                                        &mut status_updater,
+                                        setup_cancel_requested.clone(),
+                                    ) {
+                                        break Err(recovery_error.context(
+                                            "Failed to rebuild .venv after backend startup timeout",
+                                        ));
+                                    }
+
+                                    info!(
+                                        "Retrying gui.py after rebuilding dependencies on http://127.0.0.1:{port}/"
+                                    );
+                                    status_updater(
+                                        SplashUpdate::loading(
+                                            t!("splash.starting"),
+                                            t!("splash.webui_init_slow"),
+                                            97,
+                                        )
+                                        .with_subtitle(format!(
+                                            "{} | Tips:{}",
+                                            t!("splash.starting_backend"),
+                                            crate::setup::get_tip()
+                                        )),
+                                    );
+                                }
+                                Err(error) => break Err(error),
+                            }
+                        };
+                        let b = match backend_result {
                             Ok(backend) => backend,
                             Err(e) => {
                                 error!("{e}");
                                 setup_running.store(false, Ordering::SeqCst);
+                                if setup_cancel_requested.load(Ordering::SeqCst) {
+                                    return;
+                                }
                                 if start_minimized {
                                     let _ = reveal_window(&splash);
                                 }
@@ -2201,9 +2367,10 @@ fn main() -> Result<()> {
 }
 
 fn initialize_logging() -> Result<WorkerGuard> {
-    fs::create_dir_all("log")?;
+    let log_dir = Path::new("log");
     let log_filename = today_launcher_log_filename();
-    let file_appender = tracing_appender::rolling::never("log", log_filename);
+    truncate_log_file(log_dir, &log_filename)?;
+    let file_appender = tracing_appender::rolling::never(log_dir, log_filename);
     let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
 
     let file_layer = tracing_subscriber::fmt::layer()
@@ -2221,6 +2388,14 @@ fn initialize_logging() -> Result<WorkerGuard> {
         .init();
 
     Ok(guard)
+}
+
+fn truncate_log_file(log_dir: &Path, filename: &str) -> Result<()> {
+    fs::create_dir_all(log_dir)?;
+    let path = log_dir.join(filename);
+    fs::File::create(&path)
+        .with_context(|| format!("truncate launcher log file {}", path.display()))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -3360,6 +3535,57 @@ fn splash_redesigned_shell_html(video_bg_b64: &str, mi_sans_font_b64: &str) -> S
     font-variant-numeric: tabular-nums;
     text-shadow: 0 2px 6px rgba(0, 0, 0, 0.32);
   }
+  .uv-progress-container {
+    display: none;
+    margin-top: -3px;
+    margin-bottom: 15px;
+  }
+  .uv-progress-container.is-visible {
+    display: block;
+  }
+  .uv-progress-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+    color: var(--text-sub);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .uv-progress-detail {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .uv-progress-bar-bg {
+    width: 100%;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.16);
+  }
+  .uv-progress-bar-fill {
+    position: relative;
+    width: 2%;
+    height: 100%;
+    overflow: hidden;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #77e7a4, #47b8ff);
+    box-shadow: 0 0 10px rgba(71, 184, 255, 0.42);
+    transition: width 0.45s ease;
+  }
+  .uv-progress-bar-fill::after {
+    position: absolute;
+    inset: 0;
+    content: "";
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.42), transparent);
+    transform: translateX(-100%);
+    animation: sweep 1.8s ease-in-out infinite;
+  }
   .footer-info {
     display: flex;
     justify-content: space-between;
@@ -3529,6 +3755,16 @@ fn splash_redesigned_shell_html(video_bg_b64: &str, mi_sans_font_b64: &str) -> S
         </div>
       </div>
 
+      <div id="uv-progress-container" class="uv-progress-container" aria-hidden="true">
+        <div class="uv-progress-header">
+          <span id="uv-progress-detail" class="uv-progress-detail"></span>
+          <span id="uv-progress-pct">0%</span>
+        </div>
+        <div class="uv-progress-bar-bg">
+          <div id="uv-progress-fill" class="uv-progress-bar-fill" style="width: 2%;"></div>
+        </div>
+      </div>
+
       <div class="footer-info">
         <div id="tip-text" class="tip-text">Tips: $I18N_DEFAULT_TIP</div>
         <div class="footer-right">
@@ -3580,6 +3816,10 @@ fn splash_redesigned_shell_html(video_bg_b64: &str, mi_sans_font_b64: &str) -> S
       const errorDot = document.getElementById('error-dot');
       const progressFill = document.getElementById('progress-fill');
       const progressPct = document.getElementById('progress-pct');
+      const uvProgressContainer = document.getElementById('uv-progress-container');
+      const uvProgressFill = document.getElementById('uv-progress-fill');
+      const uvProgressPct = document.getElementById('uv-progress-pct');
+      const uvProgressDetail = document.getElementById('uv-progress-detail');
       const progressMeta = document.getElementById('progress-meta');
       const splashActions = document.getElementById('splash-actions');
       const subtitle = splitSubtitle(payload.subtitle);
@@ -3595,6 +3835,19 @@ fn splash_redesigned_shell_html(video_bg_b64: &str, mi_sans_font_b64: &str) -> S
       const progress = Math.max(0, Math.min(100, Number(payload.progress || 0)));
       progressFill.style.width = progress + '%';
       progressPct.textContent = progress + '%';
+
+      const uvState = payload.uv_progress;
+      const hasUvProgress = !payload.is_error
+        && uvState
+        && Number.isFinite(Number(uvState.progress));
+      uvProgressContainer.classList.toggle('is-visible', Boolean(hasUvProgress));
+      uvProgressContainer.setAttribute('aria-hidden', String(!hasUvProgress));
+      if (hasUvProgress) {
+        const uvProgress = Math.max(0, Math.min(99, Number(uvState.progress)));
+        uvProgressFill.style.width = uvProgress + '%';
+        uvProgressPct.textContent = uvProgress + '%';
+        uvProgressDetail.textContent = String(uvState.detail || '');
+      }
 
       if (payload.is_error) {
         document.body.classList.add('error-state');

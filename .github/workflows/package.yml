@@ -147,7 +147,7 @@ jobs:
         env:
           ALAS_LAUNCHER_MTLS_IDENTITY_PEM_B64: ${{ secrets.ALAS_LAUNCHER_MTLS_IDENTITY_PEM_B64 }}
           REQUIRE_LAUNCHER_MTLS_IDENTITY: "1"
-          LAUNCHER_UPDATE_URL: ${{ secrets.LAUNCHER_NEW_UPDATE_URL }}
+          LAUNCHER_UPDATE_URL: https://ap-launcher-update.nanoda.work/updata/stable.json
         run: cargo build --verbose --release
       - name: Get git
         uses: knicknic/os-specific-run@v1.0.3
@@ -577,8 +577,8 @@ jobs:
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       R2_PREFIX: ${{ secrets.R2_PREFIX }}
       R2_REGION: ${{ secrets.R2_REGION }}
-      NEW_UPDATE_URL: ${{ secrets.LAUNCHER_NEW_UPDATE_URL }}
-      NEW_PAYLOAD_BASE_URL: ${{ secrets.LAUNCHER_NEW_PAYLOAD_BASE_URL }}
+      NEW_UPDATE_URL: https://ap-launcher-update.nanoda.work/updata/stable.json
+      NEW_PAYLOAD_BASE_URL: https://ap-launcher-update-cdn-cn.nanoda.work/updata
       NEW_MANIFEST_DEPLOY_ROOT: ${{ secrets.NEW_MANIFEST_DEPLOY_ROOT }}
     steps:
       - name: Download launcher updater payloads
