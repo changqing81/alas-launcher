@@ -12,9 +12,10 @@ on:
         type: string
 
 env:
+  UV_VERSION: "0.11.32"
   UV_MANAGED_PYTHON: 1
   UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/python
-  UV_PYTHON: 3.14.3
+  UV_PYTHON: 3.14.6
 
 jobs:
   package:
@@ -41,6 +42,8 @@ jobs:
         uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
       - name: Prepare version from tag or input
         shell: python
         env:
@@ -144,7 +147,7 @@ jobs:
         env:
           ALAS_LAUNCHER_MTLS_IDENTITY_PEM_B64: ${{ secrets.ALAS_LAUNCHER_MTLS_IDENTITY_PEM_B64 }}
           REQUIRE_LAUNCHER_MTLS_IDENTITY: "1"
-          LAUNCHER_UPDATE_URL: ${{ secrets.LAUNCHER_NEW_UPDATE_URL }}
+          LAUNCHER_UPDATE_URL: https://ap-launcher-update.nanoda.work/updata/stable.json
         run: cargo build --verbose --release
       - name: Get git
         uses: knicknic/os-specific-run@v1.0.3
@@ -224,8 +227,8 @@ jobs:
             mkdir -p config .venv/bin bootstrap
             cp ../../deploy.mac.yaml config/deploy.yaml
             export UV_PYTHON_INSTALL_DIR="$PWD/.venv/python"
-            uv python install --install-dir .venv/python --no-bin --managed-python 3.14.3
-            python_home="$(find .venv/python -maxdepth 1 -type d -name 'cpython-3.14.3-*' | head -n1)"
+            uv python install --install-dir .venv/python --no-bin --managed-python 3.14.6
+            python_home="$(find .venv/python -maxdepth 1 -type d -name 'cpython-3.14.6-*' | head -n1)"
             uv venv --allow-existing --relocatable --python "$python_home/bin/python3.14" .venv
             uv pip install --python .venv/bin/python requests
             cp ../../bootstrap/uv .venv/bin/uv
@@ -278,8 +281,8 @@ jobs:
             mkdir -p config .venv/bin bootstrap
             cp ../../deploy.unix.yaml config/deploy.yaml
             export UV_PYTHON_INSTALL_DIR="$PWD/.venv/python"
-            uv python install --install-dir .venv/python --no-bin --managed-python 3.14.3
-            python_home="$(find .venv/python -maxdepth 1 -type d -name 'cpython-3.14.3-*' | head -n1)"
+            uv python install --install-dir .venv/python --no-bin --managed-python 3.14.6
+            python_home="$(find .venv/python -maxdepth 1 -type d -name 'cpython-3.14.6-*' | head -n1)"
             uv venv --allow-existing --relocatable --python "$python_home/bin/python3.14" .venv
             uv pip install --python .venv/bin/python requests
             cp ../../bootstrap/uv .venv/bin/uv
@@ -327,8 +330,8 @@ jobs:
             mkdir -ea 0 bootstrap
             cp ..\..\deploy.windows.yaml config\deploy.yaml
             $env:UV_PYTHON_INSTALL_DIR = "$PWD\.venv\python"
-            uv python install --install-dir .venv\python --no-bin --managed-python 3.14.3
-            $python_home = Get-ChildItem .venv\python -Directory | Where-Object { $_.Name -like "cpython-3.14.3-*" } | Select-Object -First 1
+            uv python install --install-dir .venv\python --no-bin --managed-python 3.14.6
+            $python_home = Get-ChildItem .venv\python -Directory | Where-Object { $_.Name -like "cpython-3.14.6-*" } | Select-Object -First 1
             uv venv --allow-existing --relocatable --python "$($python_home.FullName)\python.exe" .venv
             uv pip install --python .venv\Scripts\python.exe requests
             cp ..\..\bootstrap\uv.exe .venv\Scripts\uv.exe
@@ -441,7 +444,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref_type == 'tag'
         with:
-          prerelease: true
+          prerelease: false
           files: |
             AzurLaneAutoScript-${{ runner.os }}-*
             AzurLaneAutoScript-CN-${{ runner.os }}-*
@@ -574,8 +577,8 @@ jobs:
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       R2_PREFIX: ${{ secrets.R2_PREFIX }}
       R2_REGION: ${{ secrets.R2_REGION }}
-      NEW_UPDATE_URL: ${{ secrets.LAUNCHER_NEW_UPDATE_URL }}
-      NEW_PAYLOAD_BASE_URL: ${{ secrets.LAUNCHER_NEW_PAYLOAD_BASE_URL }}
+      NEW_UPDATE_URL: https://ap-launcher-update.nanoda.work/updata/stable.json
+      NEW_PAYLOAD_BASE_URL: https://ap-launcher-update-cdn-cn.nanoda.work/updata
       NEW_MANIFEST_DEPLOY_ROOT: ${{ secrets.NEW_MANIFEST_DEPLOY_ROOT }}
     steps:
       - name: Download launcher updater payloads
