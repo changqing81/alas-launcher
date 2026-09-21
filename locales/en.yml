@@ -115,7 +115,7 @@ dialog:
   starting: "Starting"
   startup_failed: "Startup failed"
   repo_setup_failed: "Failed to prepare the environment. You can download the launcher log below for details.\n\n%{error}"
-  backend_launch_failed: "Failed to start local service. Please check if the configured port is already in use.\n\n%{error}"
+  backend_launch_failed: "Failed to start the local service. Retry, or check the log for details.\n\n%{error}"
 
 tray:
   toggle_visibility: "Show / Hide"

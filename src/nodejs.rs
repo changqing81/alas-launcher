@@ -48,9 +48,9 @@ const NODEJS_MIN_FRONTEND_VERSION: (u32, u32, u32) = (22, 12, 0);
 /// 与 NODEJS_MIN_FRONTEND_VERSION 对应的文本形式，供 UI 文案使用。
 pub const NODEJS_MIN_FRONTEND_VERSION_TEXT: &str = "22.12.0";
 
-/// 私有安装目录的上级目录名，位于用户本地应用数据下。
 #[cfg(windows)]
-const NODEJS_LAUNCHER_DIRECTORY: &str = "AzurPilotLauncher";
+/// 私有安装目录的上级目录名，位于仅管理员可写的 ProgramData 下。
+const NODEJS_MACHINE_DIRECTORY: &str = "AzurPilotLauncher";
 #[cfg(windows)]
 const NODEJS_PRIVATE_SUBDIRECTORY: &str = "nodejs";
 
@@ -146,7 +146,7 @@ impl SecureNodeJsInstallerDir {
 #[cfg(windows)]
 impl Drop for SecureNodeJsInstallerDir {
     fn drop(&mut self) {
-        let installer = self.path.join("nodejs-lts.msi");
+        let installer = self.path.join(NODEJS_ARCHIVE_FILE_NAME);
         if let Err(error) = fs::remove_file(&installer) {
             if error.kind() != io::ErrorKind::NotFound {
                 warn!(path = %installer.display(), "Unable to remove Node.js installer: {error}");
@@ -175,10 +175,10 @@ pub enum NodeJsAvailability {
 #[cfg(windows)]
 /// 启动器自有的 Node.js 安装目录，与系统安装完全隔离。
 fn private_nodejs_directory() -> Result<PathBuf> {
-    let base = dirs::data_local_dir()
-        .ok_or_else(|| anyhow::anyhow!("Unable to resolve local app data directory"))?;
-    Ok(base
-        .join(NODEJS_LAUNCHER_DIRECTORY)
+    let base = std::env::var_os("ProgramData")
+        .ok_or_else(|| anyhow::anyhow!("Unable to resolve ProgramData directory"))?;
+    Ok(PathBuf::from(base)
+        .join(NODEJS_MACHINE_DIRECTORY)
         .join(NODEJS_PRIVATE_SUBDIRECTORY))
 }
 
@@ -534,14 +534,28 @@ fn verify_nodejs_installer(installer_path: &Path, expected_sha256: &str) -> Resu
 }
 
 #[cfg(windows)]
+/// 清空私有目录后重建，使解压结果不与旧安装残留混合。
+fn reset_private_directory(target: &Path) -> Result<()> {
+    match fs::remove_dir_all(target) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("clear private Node.js directory {}", target.display()));
+        }
+    }
+    fs::create_dir_all(target)
+        .with_context(|| format!("create private Node.js directory {}", target.display()))
+}
+
+#[cfg(windows)]
 /// 用系统 PowerShell 解开官方 zip，再摊平归档内的顶层目录。
 fn extract_nodejs_zip(
     archive_path: &Path,
     target: &Path,
     cancel_requested: &AtomicBool,
 ) -> Result<()> {
-    fs::create_dir_all(target)
-        .with_context(|| format!("create private Node.js directory {}", target.display()))?;
+    reset_private_directory(target)?;
 
     let powershell = system_powershell_path()?;
     // 经环境变量传路径；短名可避免含空格或引号的路径被拆成多个参数。

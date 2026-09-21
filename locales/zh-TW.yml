@@ -115,7 +115,7 @@ dialog:
   starting: "正在啟動"
   startup_failed: "啟動失敗"
   repo_setup_failed: "無法準備環境。您可以下載下方的啟動器日誌以查看詳細錯誤。\n\n%{error}"
-  backend_launch_failed: "無法啟動本機服務。請檢查設定的連接埠是否已被佔用。\n\n%{error}"
+  backend_launch_failed: "無法啟動本機服務，可重試或查看日誌了解詳情。\n\n%{error}"
 
 tray:
   toggle_visibility: "顯示 / 隱藏"

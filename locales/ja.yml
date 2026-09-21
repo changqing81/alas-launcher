@@ -115,7 +115,7 @@ dialog:
   starting: "起動中"
   startup_failed: "起動失敗"
   repo_setup_failed: "環境を準備できませんでした。下記からランチャーログをダウンロードして詳細なエラーを確認できます。\n\n%{error}"
-  backend_launch_failed: "ローカルサービスを起動できませんでした。設定されたポートが他のプログラムに使用されていないか確認してください。\n\n%{error}"
+  backend_launch_failed: "ローカルサービスを起動できませんでした。再試行するか、ログを確認してください。\n\n%{error}"
 
 tray:
   toggle_visibility: "表示 / 非表示"

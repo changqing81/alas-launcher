@@ -115,7 +115,7 @@ dialog:
   starting: "正在启动"
   startup_failed: "启动失败"
   repo_setup_failed: "无法准备环境。您可以下载下方的启动器日志以查看详细错误。\n\n%{error}"
-  backend_launch_failed: "无法启动本地服务。请检查配置的端口是否已被占用。\n\n%{error}"
+  backend_launch_failed: "无法启动本地服务，可重试或查看日志了解详情。\n\n%{error}"
 
 tray:
   toggle_visibility: "显示 / 隐藏"
