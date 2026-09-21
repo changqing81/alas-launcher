@@ -1001,7 +1001,7 @@ fn run_command_with_retry(
     unreachable!()
 }
 
-fn run_status_command(
+pub fn run_status_command(
     cmd: &mut Command,
     cancel_requested: &AtomicBool,
 ) -> Result<std::process::ExitStatus> {

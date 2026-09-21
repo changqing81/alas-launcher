@@ -1960,14 +1960,32 @@ fn prompt_for_missing_nodejs(
     cancel_requested: &AtomicBool,
     start_minimized: bool,
 ) -> bool {
-    if crate::nodejs::is_nodejs_available() {
+    let availability = crate::nodejs::is_nodejs_available();
+    if matches!(availability, crate::nodejs::NodeJsAvailability::Ready) {
         return true;
     }
     if cancel_requested.load(Ordering::SeqCst) {
         return false;
     }
 
-    warn!("Node.js was not found on this Windows system");
+    // 两种情形文案不同：完全没装，与装了但版本低于构建要求。
+    let (title, message, log) = match &availability {
+        crate::nodejs::NodeJsAvailability::Outdated(found) => (
+            t!("dialog.nodejs_outdated_title"),
+            t!(
+                "dialog.nodejs_outdated_message",
+                found = found,
+                minimum = crate::nodejs::NODEJS_MIN_FRONTEND_VERSION_TEXT
+            ),
+            "Node.js version is below the version required by the frontend build",
+        ),
+        _ => (
+            t!("dialog.nodejs_missing_title"),
+            t!("dialog.nodejs_missing_message"),
+            "Node.js was not found on this Windows system",
+        ),
+    };
+    warn!("{log}");
     if start_minimized {
         let _ = reveal_window(splash);
     }
@@ -1979,8 +1997,8 @@ fn prompt_for_missing_nodejs(
 
     let install_requested = app_handle
         .dialog()
-        .message(t!("dialog.nodejs_missing_message"))
-        .title(t!("dialog.nodejs_missing_title"))
+        .message(message)
+        .title(title)
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
             t!("dialog.nodejs_install").to_string(),
