@@ -476,6 +476,7 @@ jobs:
       - name: Build stable.json
         env:
           VERSION: ${{ github.ref_name }}
+          TAG: ${{ github.ref_name }}
           REPO: changqing81/alas-launcher
         run: |
           python - <<'PY'
@@ -490,7 +491,10 @@ jobs:
           if version.startswith("v"):
               version = version[1:]
 
-          base_url = f"https://github.com/{repo}/releases/download/v{version}"
+          # release 资产下载 URL 里的那一段必须等于 tag 本身。
+          # 本仓库的 tag 不带 v 前缀，早先这里硬编码补了 "v"，
+          # 导致 3.0.0 的整份清单指向 /download/v3.0.0/... → 404，自更新直接不可用。
+          base_url = f"https://github.com/{repo}/releases/download/{os.environ['TAG'].strip()}"
 
           root = Path("launcher-updater")
           files = sorted(
@@ -531,6 +535,40 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           gh release upload "$TAG" launcher-updater/stable.json launcher-updater/alas-launcher-* --clobber
+      - name: Verify launcher update URLs are reachable
+        # 清单里的 URL 是启动器自更新的唯一依据，404 会让所有用户自更新直接失败。
+        # 这里逐个发一次 Range 请求，发布后立刻验证，坏了就红灯。
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+
+          manifest = json.loads(Path("launcher-updater/stable.json").read_text(encoding="utf-8"))
+          failed = []
+          for key, item in manifest["platforms"].items():
+              url = item["url"]
+              ok = False
+              for attempt in range(5):
+                  result = subprocess.run(
+                      ["curl", "-fsL", "-r", "0-0", "-o", "/dev/null",
+                       "--max-time", "30", url],
+                      capture_output=True,
+                      text=True,
+                  )
+                  if result.returncode == 0:
+                      ok = True
+                      break
+                  time.sleep(5)
+              print(f"{key}: {'OK' if ok else 'FAILED'} {url}", flush=True)
+              if not ok:
+                  failed.append(url)
+
+          if failed:
+              sys.exit("Unreachable launcher update URLs: " + ", ".join(failed))
+          PY
       - name: Publish manifest to main as a fallback channel
         # 兜底通路：主地址( release 资产 )不可用时可从 raw 拉到清单。
         # 分支保护可能拦住这次 push，因此不让它影响发版。
