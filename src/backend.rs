@@ -1,13 +1,12 @@
 use std::{
     collections::BTreeSet,
     net::TcpStream,
-    process::{Command, ExitStatus},
+    process::{Child, Command, ExitStatus},
     thread::sleep,
     time::Duration,
 };
 
 use anyhow::{anyhow, Result};
-use command_group::{CommandGroup, GroupChild};
 use serde_json::Value as JsonValue;
 use tracing::{info, warn};
 
@@ -165,8 +164,21 @@ fn value_as_string_list(value: &JsonValue) -> Vec<String> {
     }
 }
 
+/// 启动器承载的 gui.py 进程。
+///
+/// 这里**刻意不用进程组 / Job Object**：command-group 创建的 Job 只设
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`、未设 `BREAKAWAY_OK`，于是
+/// 1) 关闭启动器时 `TerminateJobObject` 会连坐杀掉 Job 内的一切进程，
+///    包括 gui.py 用 `cmd /c start` 拉起的模拟器（`start` 只脱离父子链，
+///    不脱离 Job）；
+/// 2) 因为没设 `BREAKAWAY_OK`，子进程也无法用 `CREATE_BREAKAWAY_FROM_JOB`
+///    自保（实测被拒，ERROR_ACCESS_DENIED）。
+/// 实测（2026-10-02）：MuMu 的 MuMuNxMain.exe 正因此被一并终止。
+/// 现在只记录 PID、只终止这一个进程；漏网的 worker 由 Drop 里的
+/// `ALAS_LAUNCHER_PID` 扫描兜底，残留端口占用由启动时的
+/// `kill_processes_using_port` 清理。
 pub struct ManagedBackend {
-    child: Option<GroupChild>,
+    child: Option<Child>,
 }
 
 impl ManagedBackend {
@@ -180,7 +192,7 @@ impl ManagedBackend {
         // isolate_python_child_environment 不清理该键。
         command.env(TRUST_SECRET_ENV, launcher_trust_secret());
         isolate_python_child_environment(&mut command);
-        let child = command.group().create_no_window().spawn()?;
+        let child = command.create_no_window().spawn()?;
         let mut res = Self { child: Some(child) };
 
         let address = format!("127.0.0.1:{}", config.port).parse().unwrap();
@@ -213,8 +225,11 @@ impl ManagedBackend {
         if let Some(mut child) = self.child.take() {
             #[cfg(unix)]
             {
-                use command_group::{Signal, UnixChildExt};
-                let _ = child.signal(Signal::SIGTERM);
+                // 只对 backend 自身发信号，不再像 Job 那样连坐它的后代进程
+                use nix::sys::signal::{kill, Signal};
+                use nix::unistd::Pid;
+
+                let _ = kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
                 let start_time = std::time::Instant::now();
                 while start_time.elapsed() < Duration::from_millis(500) {
                     if let Ok(Some(exit_status)) = child.try_wait() {
@@ -344,6 +359,21 @@ fn local_address_uses_port(address: &str, port: u16) -> bool {
         == Some(port)
 }
 
+/// 绝不误杀的进程名片段（小写）：模拟器主程序 / 管理工具 / 设备进程。
+///
+/// 它们由 Alas 用 `cmd /c start` 拉起，会继承启动器注入的 `ALAS_LAUNCHER_PID`，
+/// 但它们不是启动器的 worker —— 关掉启动器不该关掉模拟器。
+const EMULATOR_PROCESS_NAME_HINTS: [&str; 8] = [
+    "mumu",
+    "nemu",
+    "dnplayer",
+    "ldconsole",
+    "bluestacks",
+    "hd-player",
+    "nox",
+    "memu",
+];
+
 impl Drop for ManagedBackend {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
@@ -352,15 +382,27 @@ impl Drop for ManagedBackend {
                 Err(e) => warn!("Failed to kill gui.py process: {:?}", e),
             }
         }
-        // Kill potential leaked processes
+        // 清理漏网的 backend worker：按注入的环境变量识别。
+        // 刻意跳过模拟器进程（见 EMULATOR_PROCESS_NAME_HINTS），
+        // 否则会重演"关启动器连坐关掉模拟器"的老问题。
         let sys = sysinfo::System::new_all();
         for (pid, process) in sys.processes() {
+            if pid.as_u32() == std::process::id() {
+                continue;
+            }
+            let name = process.name().to_string_lossy().to_ascii_lowercase();
+            if EMULATOR_PROCESS_NAME_HINTS
+                .iter()
+                .any(|hint| name.contains(hint))
+            {
+                continue;
+            }
             for var in process.environ() {
-                if pid.as_u32() != std::process::id()
-                    && var.to_str().unwrap_or_default()
-                        == format!("ALAS_LAUNCHER_PID={}", std::process::id())
+                if var.to_str().unwrap_or_default()
+                    == format!("ALAS_LAUNCHER_PID={}", std::process::id())
                 {
                     process.kill();
+                    break;
                 }
             }
         }
