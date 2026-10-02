@@ -178,7 +178,28 @@ GitHub Actions（`.github/workflows/package.yml`）：
 - 下载 Android platform-tools（adb）
 - 创建可重定位 `.venv`（Python 3.14.6 + uv + adb + git + requests）
 - 打包为 `tar.xz` 归档（国际版 + CN 镜像版）
-- 部署启动器自动更新载荷到 `alas.nanoda.work`（通过 SSH）
+- `deploy-launcher-manifest` job 把启动器二进制 + `stable.json` 作为 release 资产上传，供自更新使用（不再依赖任何自建服务器 / SSH）
+
+#### 发版流程（自更新）
+
+1. 改代码 → commit → push 到 `main`
+2. 打 tag，**不带 `v` 前缀**：`git tag 3.0.1 && git push origin 3.0.1`
+   （`Prepare version from tag` 用严格的 SemVer 正则校验，`v3.0.1` 会直接让 job 失败）
+3. CI 自动按 tag 改写 `Cargo.toml` / `tauri.conf.json` / `Info.plist` / `Cargo.lock` 的版本（只改 CI 工作区，不提交回仓库），
+   构建 4 个平台（含 `windows-11-arm`），产物发到该 tag 的 release
+4. `stable.json` 生成后上传为 release 资产，并 `git push` 回 `main` 的 `updata/stable.json`（兜底通路，`continue-on-error`）
+
+自更新链路（`src/main.rs`）：
+- 主地址 `https://github.com/changqing81/alas-launcher/releases/latest/download/stable.json`
+  （`build.rs` 常量，可由环境变量 `LAUNCHER_UPDATE_URL` 覆盖，编译进二进制，因此**永久不变**）
+- 兜底 `https://raw.githubusercontent.com/changqing81/alas-launcher/main/updata/stable.json`
+- `manifest.version > CARGO_PKG_VERSION` 才更新；下载后校验 sha256，替换自身 exe 并重启
+
+要点：
+- **不 bump 版本号就不会触发自更新**（比较是严格大于）
+- `releases/latest/download/` 只指向最新**非 prerelease、非 draft** 的 release
+- release 资产下载 URL 的那一段必须**等于 tag 本身**；本仓库 tag 不带 `v`，
+  早期代码硬编码补 `v` 导致 3.0.0 整份清单 404（已修，并在发布后加了可达性校验步骤）
 
 ### 关键常量与配置
 
