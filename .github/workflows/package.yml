@@ -169,8 +169,11 @@ jobs:
             PkgConfigDeps
             CONANFILE
             container_id=$(docker run -d -v $PWD:/volume --rm -t quay.io/pypa/manylinux2010_x86_64:latest)
-            docker exec -w /volume -t $container_id yum update
-            docker exec -w /volume -t $container_id yum install -y gettext perl-IPC-Cmd perl-Digest-SHA
+            # manylinux2010 基于 CentOS 6，其 EPEL 6 仓库已下线
+            # （archives.fedoraproject.org/.../epel/6/repodata/repomd.xml 返回 404），
+            # yum 只要碰到失效仓库就会整体报错退出。gettext/perl-IPC-Cmd/perl-Digest-SHA
+            # 在 base/updates 仓库里都有，所以直接禁用 epel，并去掉只做系统升级的 yum update。
+            docker exec -w /volume -t $container_id yum install -y --disablerepo='*epel*' gettext perl-IPC-Cmd perl-Digest-SHA
             docker exec -w /volume -t $container_id pipx install conan
             docker exec -w /volume -t $container_id conan profile detect --force
             docker exec -w /volume -t $container_id conan install . --build=missing --build="m4*"
@@ -457,7 +460,12 @@ jobs:
   deploy-launcher-manifest:
     # 把各平台的启动器二进制与 stable.json 作为 release 资产发布，
     # 供启动器自更新使用（无需任何自建服务器或 SSH/R2 密钥）。
-    if: github.ref_type == 'tag'
+    # 注意：needs: package 默认要求矩阵里所有平台都成功，任一平台失败
+    # （例如 ubuntu 的 Get git 依赖的 CentOS 6 / EPEL 6 仓库已下线）
+    # 会让本 job 静默跳过 —— 后果是 stable.json 与启动器二进制永远发不出去，
+    # 所有用户的自更新通道整体失效。因此这里用 always() 兜底：
+    # 清单里缺哪个平台就少哪个条目，总比所有平台都拿不到清单强。
+    if: ${{ always() && github.ref_type == 'tag' }}
     needs: package
     runs-on: ubuntu-latest
     permissions:
