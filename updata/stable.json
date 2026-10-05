@@ -1,23 +1,23 @@
 {
-  "version": "3.0.3",
-  "pub_date": "2026-10-05T13:21:48.406697Z",
-  "notes": "Launcher auto update 3.0.3",
+  "version": "3.0.2",
+  "pub_date": "2026-10-02T09:08:23.012839Z",
+  "notes": "Launcher auto update 3.0.2",
   "platforms": {
     "darwin-aarch64": {
-      "url": "https://github.com/changqing81/alas-launcher/releases/download/3.0.3/alas-launcher-darwin-aarch64",
-      "sha256": "cdec0ea3e0a142b1b4bc4628f1ed4dd6ac1b7135840cb54daea6fb60d1a0f754"
+      "url": "https://github.com/changqing81/alas-launcher/releases/download/3.0.2/alas-launcher-darwin-aarch64",
+      "sha256": "e960efe6eed196a9031931090aa418a7b1597593dbc30404b4e3bd8257652499"
     },
     "linux-x86_64": {
-      "url": "https://github.com/changqing81/alas-launcher/releases/download/3.0.3/alas-launcher-linux-x86_64",
-      "sha256": "befd3d04fb699e94d6c48a91344b014992dc776c9aa1066b76fe014659866403"
+      "url": "https://github.com/changqing81/alas-launcher/releases/download/3.0.2/alas-launcher-linux-x86_64",
+      "sha256": "3c3ebbd66a4872fbaaa06711247068a32525608e4e7cee095d835a769b47c127"
     },
     "windows-aarch64": {
-      "url": "https://github.com/changqing81/alas-launcher/releases/download/3.0.3/alas-launcher-windows-aarch64.exe",
-      "sha256": "0a6691a72af3929e25679efbb2287507d075d1747d4cc2397f6375573f668cae"
+      "url": "https://github.com/changqing81/alas-launcher/releases/download/3.0.2/alas-launcher-windows-aarch64.exe",
+      "sha256": "1788765f3bc0fead262fe2e13029f1ec54a42c0316cb43fece856247170779d0"
     },
     "windows-x86_64": {
-      "url": "https://github.com/changqing81/alas-launcher/releases/download/3.0.3/alas-launcher-windows-x86_64.exe",
-      "sha256": "ad3e2d6177fa78d92b0617338de0830432db940f03a21402eaebfeefd71c01b7"
+      "url": "https://github.com/changqing81/alas-launcher/releases/download/3.0.2/alas-launcher-windows-x86_64.exe",
+      "sha256": "cd366604e5da060dd72a016e04d5b42c761d3b90c89eb02e96a7614f739f2324"
     }
   }
 }
