@@ -5,7 +5,6 @@ mod autostart;
 mod backend;
 mod i18n;
 mod launcher_control;
-mod nodejs;
 mod notify;
 mod setup;
 mod window_util;
@@ -61,8 +60,6 @@ use tauri::{
     Manager, State, Url, WebviewWindow,
 };
 use tauri_plugin_dialog::{DialogExt, FilePath};
-#[cfg(windows)]
-use tauri_plugin_dialog::{MessageDialogButtons, MessageDialogKind};
 use tempfile::Builder as TempDirBuilder;
 use tracing::{debug, error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -1324,7 +1321,17 @@ fn launcher_arg_present(flags: &[&str]) -> bool {
 }
 
 fn preview_no_update_arg_present() -> bool {
-    launcher_arg_present(PREVIEW_NO_UPDATE_ARGS)
+    launcher_arg_present(PREVIEW_NO_UPDATE_ARGS) || launcher_update_disabled_by_marker()
+}
+
+/// exe 同目录存在 no-auto-update.flag 时永久跳过自更新（本地定制包用），
+/// 与 --no-update 参数等价：跳过检查、下载与换版本全过程。
+fn launcher_update_disabled_by_marker() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("no-auto-update.flag")))
+        .map(|path| path.is_file())
+        .unwrap_or(false)
 }
 
 fn preview_crash_arg_present() -> bool {
@@ -1957,96 +1964,6 @@ fn set_macos_activation_policy(app: &tauri::AppHandle, regular: bool) {
     }
 }
 
-#[cfg(windows)]
-fn prompt_for_missing_nodejs(
-    app_handle: &tauri::AppHandle,
-    splash: &WebviewWindow,
-    mut status_updater: &mut impl FnMut(SplashUpdate),
-    cancel_requested: &AtomicBool,
-    start_minimized: bool,
-) -> bool {
-    let availability = crate::nodejs::is_nodejs_available();
-    if matches!(availability, crate::nodejs::NodeJsAvailability::Ready) {
-        return true;
-    }
-    if cancel_requested.load(Ordering::SeqCst) {
-        return false;
-    }
-
-    // 两种情形文案不同：完全没装，与装了但版本低于构建要求。
-    let (title, message, log) = match &availability {
-        crate::nodejs::NodeJsAvailability::Outdated(found) => (
-            t!("dialog.nodejs_outdated_title"),
-            t!(
-                "dialog.nodejs_outdated_message",
-                found = found,
-                minimum = crate::nodejs::NODEJS_MIN_FRONTEND_VERSION_TEXT
-            ),
-            "Node.js version is below the version required by the frontend build",
-        ),
-        _ => (
-            t!("dialog.nodejs_missing_title"),
-            t!("dialog.nodejs_missing_message"),
-            "Node.js was not found on this Windows system",
-        ),
-    };
-    warn!("{log}");
-    if start_minimized {
-        let _ = reveal_window(splash);
-    }
-    status_updater(SplashUpdate::loading(
-        t!("setup.checking_nodejs"),
-        t!("setup.checking_nodejs"),
-        5,
-    ));
-
-    let install_requested = app_handle
-        .dialog()
-        .message(message)
-        .title(title)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            t!("dialog.nodejs_install").to_string(),
-            t!("dialog.nodejs_not_now").to_string(),
-        ))
-        .parent(splash)
-        .blocking_show();
-    if !install_requested {
-        info!("Node.js installation was declined by the user");
-        return true;
-    }
-
-    match crate::nodejs::install_nodejs(cancel_requested, &mut status_updater) {
-        Ok(()) => {
-            info!("Node.js installation completed successfully");
-            true
-        }
-        Err(_) if cancel_requested.load(Ordering::SeqCst) => false,
-        Err(error) => {
-            error!("Node.js installation failed: {error:#}");
-            status_updater(SplashUpdate::error(
-                t!("dialog.nodejs_install_failed"),
-                t!(
-                    "dialog.nodejs_install_failed_detail",
-                    error = format!("{error:#}")
-                ),
-                7,
-            ));
-            app_handle
-                .dialog()
-                .message(t!(
-                    "dialog.nodejs_install_failed_detail",
-                    error = format!("{error:#}")
-                ))
-                .title(t!("dialog.nodejs_install_failed"))
-                .kind(MessageDialogKind::Error)
-                .parent(splash)
-                .blocking_show();
-            true
-        }
-    }
-}
-
 fn main() -> Result<()> {
     #[cfg(windows)]
     if try_apply_launcher_update_from_args()? {
@@ -2365,17 +2282,6 @@ fn main() -> Result<()> {
                             return;
                         }
 
-                        #[cfg(windows)]
-                        if !prompt_for_missing_nodejs(
-                            &app_handle,
-                            &splash,
-                            &mut status_updater,
-                            &setup_cancel_requested,
-                            start_minimized,
-                        ) {
-                            setup_running.store(false, Ordering::SeqCst);
-                            return;
-                        }
                         if setup_cancel_requested.load(Ordering::SeqCst) {
                             setup_running.store(false, Ordering::SeqCst);
                             return;
@@ -4623,11 +4529,12 @@ fn main_window_titlebar_injection_script() -> String {
                 closeMenu.addEventListener('pointerdown', event => event.stopPropagation());
                 document.body.appendChild(closeMenu);
             }
+            let seenWebioTheme = false;
             const syncTheme = () => {
                 try {
                     const doc = document.documentElement;
                     const body = document.body;
-                    let isDark = false;
+                    let isDark = titlebar.classList.contains('is-dark');
                     const dt = (doc.getAttribute('data-theme') || (body && body.getAttribute('data-theme')) || '').toLowerCase();
                     const dcm = (doc.getAttribute('data-color-mode') || (body && body.getAttribute('data-color-mode')) || '').toLowerCase();
                     if (dt.includes('dark') || dcm === 'dark') {
@@ -4640,11 +4547,11 @@ fn main_window_titlebar_injection_script() -> String {
                         isDark = false;
                     } else {
                         const wm = ((body && body.className) || '').toLowerCase();
-                        if (/(^|\s)webio-theme-\S*dark/.test(wm)) {
-                            isDark = true;
-                        } else if (wm.includes('webio-theme-')) {
-                            isDark = false;
-                        } else {
+                        const webioMatch = /(^|\s)webio-theme-(\S*)/.exec(wm);
+                        if (webioMatch) {
+                            seenWebioTheme = true;
+                            isDark = webioMatch[2].includes('dark');
+                        } else if (!seenWebioTheme) {
                             try {
                                 const st = (localStorage.getItem('azurpilot.theme') || localStorage.getItem('theme') || '').toLowerCase();
                                 const sm = (localStorage.getItem('azurpilot.color-mode') || '').toLowerCase();
@@ -4662,6 +4569,15 @@ fn main_window_titlebar_injection_script() -> String {
                     console.error('Failed to sync titlebar theme', e);
                 }
             };
+            // WebUI 切主题是异步先清 className 再写入，事件采样会撞中间态；
+            // 观察器保证类名落地即刻同步，后台切回（visibilitychange/focus）也补采样
+            const themeObserver = new MutationObserver(syncTheme);
+            themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'data-color-mode'] });
+            if (document.body) {
+                themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme', 'data-color-mode'] });
+            }
+            document.addEventListener('visibilitychange', syncTheme);
+            window.addEventListener('focus', syncTheme);
             const setCloseMenuOpen = open => {
                 if (open) syncTheme();
                 closeMenu.classList.toggle('is-open', open);
