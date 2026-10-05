@@ -113,6 +113,10 @@ const PREVIEW_NO_UPDATE_ARGS: &[&str] = &[
     "/skip-update",
     "/no-update",
 ];
+/// 编译期注入：以 AZURPILOT_LAUNCHER_NO_AUTO_UPDATE=1 构建的二进制永久禁用自更新
+/// （本地定制包用，开关随 exe 走，不依赖旁路文件/快捷方式参数）。
+const AUTO_UPDATE_DISABLED_BY_BUILD: bool =
+    option_env!("AZURPILOT_LAUNCHER_NO_AUTO_UPDATE").is_some();
 const PREVIEW_CRASH_ARGS: &[&str] = &[
     "--preview-crash",
     "--preview-error",
@@ -1321,7 +1325,9 @@ fn launcher_arg_present(flags: &[&str]) -> bool {
 }
 
 fn preview_no_update_arg_present() -> bool {
-    launcher_arg_present(PREVIEW_NO_UPDATE_ARGS) || launcher_update_disabled_by_marker()
+    AUTO_UPDATE_DISABLED_BY_BUILD
+        || launcher_arg_present(PREVIEW_NO_UPDATE_ARGS)
+        || launcher_update_disabled_by_marker()
 }
 
 /// exe 同目录存在 no-auto-update.flag 时永久跳过自更新（本地定制包用），
@@ -4550,7 +4556,12 @@ fn main_window_titlebar_injection_script() -> String {
                         const webioMatch = /(^|\s)webio-theme-(\S*)/.exec(wm);
                         if (webioMatch) {
                             seenWebioTheme = true;
-                            isDark = webioMatch[2].includes('dark');
+                            // dark_advanced_material 的 body class 是 webio-theme-default
+                            // （pywebio_theme_for 只认字面 "dark"），暗色由主题 CSS 承载。
+                            // 初始/切换两种形态都要认：<link href> 与 <style id>（swap_theme_css
+                            // 注入的是 alas-css-<文件名点换横线>，如 alas-css-dark-alas-css）
+                            isDark = webioMatch[2].includes('dark')
+                                || !!document.querySelector('link[href*="dark-alas"],link[href*="dark-advanced-material"],style[id^="alas-css-dark-"]');
                         } else if (!seenWebioTheme) {
                             try {
                                 const st = (localStorage.getItem('azurpilot.theme') || localStorage.getItem('theme') || '').toLowerCase();
@@ -4576,6 +4587,9 @@ fn main_window_titlebar_injection_script() -> String {
             if (document.body) {
                 themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme', 'data-color-mode'] });
             }
+            // 高级材质暗色的信号是 head 里的主题 CSS 链接（swap_theme_css 换链接），
+            // 盯住 head 的链接增删/href 变化
+            themeObserver.observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['href'] });
             document.addEventListener('visibilitychange', syncTheme);
             window.addEventListener('focus', syncTheme);
             const setCloseMenuOpen = open => {
