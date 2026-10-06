@@ -1183,7 +1183,7 @@ fn uv_sync_project(
     cancel_requested: &AtomicBool,
 ) -> Result<()> {
     if environment_is_synced(bootstrap_uv) {
-        return Ok(());
+        return ensure_critical_imports_ok(&mut status_updater, bootstrap_uv, cancel_requested);
     }
 
     let fingerprint = environment_fingerprint(bootstrap_uv);
@@ -1209,6 +1209,7 @@ fn uv_sync_project(
             Ok(()) => {
                 // 记下指纹，下次启动即可走快速路径。
                 let _ = fs::write(env_stamp_path(), &fingerprint);
+                ensure_critical_imports_ok(&mut status_updater, &bootstrap_uv, cancel_requested)?;
                 return Ok(());
             }
             Err(err) => {
@@ -1249,6 +1250,109 @@ fn uv_sync_command_with_paths(
     uv_python_env_with_install_dir(&mut cmd, python_install_dir);
     ignore_uv_index_env(&mut cmd);
     cmd
+}
+
+/// 关键依赖导入自检清单：(import 模块名, 提供它的包名)。
+/// uv 的审计只核对 dist-info 元数据，包文件被杀软隔离/清理工具损坏时 audit 照样
+/// 通过（用户实测：cv2 文件丢失后每次启动 uv 都报 Checked 139 全齐，gui.py 运行期
+/// 才炸 ModuleNotFoundError）。这里用真实导入提前暴露，坏了走定向重装自愈。
+const CRITICAL_IMPORT_PACKAGES: &[(&str, &str)] = &[
+    ("cv2", "opencv-python"),
+    ("numpy", "numpy"),
+    ("yaml", "pyyaml"),
+    ("pywebio", "pywebio"),
+];
+
+/// 返回导入失败的包名列表；python 本身起不来时不判定（返回空，不阻塞启动流程）。
+fn broken_critical_packages() -> Vec<&'static str> {
+    let modules = CRITICAL_IMPORT_PACKAGES
+        .iter()
+        .map(|(module, _)| *module)
+        .collect::<Vec<_>>()
+        .join(",");
+    let script = format!(
+        "import importlib\n\
+         broken = []\n\
+         for name in \"{modules}\".split(','):\n\
+         \x20   try:\n\
+         \x20       importlib.import_module(name)\n\
+         \x20   except Exception:\n\
+         \x20       broken.append(name)\n\
+         print(','.join(broken))"
+    );
+    let mut cmd = Command::new(venv_python());
+    cmd.arg("-c").arg(&script);
+    isolate_python_child_environment(&mut cmd);
+    let Ok(output) = cmd.create_no_window().output() else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let broken_modules: Vec<&str> = stdout
+        .trim()
+        .split(',')
+        .filter(|module| !module.is_empty())
+        .collect();
+    CRITICAL_IMPORT_PACKAGES
+        .iter()
+        .filter(|(module, _)| broken_modules.contains(module))
+        .map(|(_, package)| *package)
+        .collect()
+}
+
+/// 关键依赖坏了就 `uv sync --reinstall-package` 定向重装（沿用镜像回退）；
+/// 修不好也不阻塞启动——与旧行为一致，gui.py 会给出可见报错。
+fn ensure_critical_imports_ok(
+    status_updater: &mut impl FnMut(SplashUpdate),
+    bootstrap_uv: &Path,
+    cancel_requested: &AtomicBool,
+) -> Result<()> {
+    let broken = broken_critical_packages();
+    if broken.is_empty() {
+        return Ok(());
+    }
+    warn!("Critical imports broken: {broken:?}; attempting targeted reinstall");
+    status_updater(dependency_start_update());
+
+    let indexes = ranked_pypi_indexes();
+    let mut last_error = None;
+    for (attempt, index) in indexes.iter().enumerate() {
+        if cancel_requested.load(Ordering::SeqCst) {
+            bail!(t!("setup.cancel_cleaning"));
+        }
+        info!("Reinstalling broken packages with PyPI index: {index}");
+        let mut cmd = uv_sync_command(bootstrap_uv, index);
+        for package in &broken {
+            cmd.args(["--reinstall-package", package]);
+        }
+        match run_command(&mut cmd, &mut *status_updater, ScriptPhase::Dependencies, cancel_requested) {
+            Ok(()) => {
+                last_error = None;
+                break;
+            }
+            Err(err) => {
+                warn!("Reinstall failed with PyPI index {index}: {err}");
+                last_error = Some(err);
+                if attempt + 1 < indexes.len() {
+                    status_updater(pypi_index_fallback_update(&indexes[attempt + 1]));
+                    thread::sleep(RETRY_DELAY);
+                }
+            }
+        }
+    }
+
+    let still_broken = broken_critical_packages();
+    if still_broken.is_empty() {
+        info!("Critical imports restored after reinstall");
+    } else {
+        warn!("Critical imports still broken after reinstall: {still_broken:?}; continuing startup");
+    }
+    if let Some(err) = last_error {
+        warn!("Reinstall did not complete: {err}");
+    }
+    Ok(())
 }
 
 fn migrate_dependency_config() -> Result<()> {
