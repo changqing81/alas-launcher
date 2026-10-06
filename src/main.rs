@@ -1324,10 +1324,15 @@ fn launcher_arg_present(flags: &[&str]) -> bool {
     })
 }
 
+/// 仓库更新跳过请求：--no-update 参数或 no-auto-update.flag 标记。
+/// 故意不含烘焙开关——烘焙只焊死启动器自更新，仓库更新始终由参数/标记/部署设置三路控制，
+/// 否则烘焙版里部署设置的 SkipRepositoryUpdate 会被 preview_no_update 恒真短路成摆设。
+fn repo_update_skip_requested() -> bool {
+    launcher_arg_present(PREVIEW_NO_UPDATE_ARGS) || launcher_update_disabled_by_marker()
+}
+
 fn preview_no_update_arg_present() -> bool {
-    AUTO_UPDATE_DISABLED_BY_BUILD
-        || launcher_arg_present(PREVIEW_NO_UPDATE_ARGS)
-        || launcher_update_disabled_by_marker()
+    AUTO_UPDATE_DISABLED_BY_BUILD || repo_update_skip_requested()
 }
 
 /// exe 同目录存在 no-auto-update.flag 时永久跳过自更新（本地定制包用），
@@ -2057,8 +2062,8 @@ fn main() -> Result<()> {
         warn!("config/deploy.yaml not found or invalid, using default WebUI launch config");
     }
     let port = webui_config.port;
-    let skip_repository_update = preview_no_update
-        || deploy_skip_repository_update(deploy_config.as_ref());
+    let skip_repository_update =
+        repo_update_skip_requested() || deploy_skip_repository_update(deploy_config.as_ref());
     if skip_repository_update && !preview_no_update {
         info!("部署设置 SkipRepositoryUpdate 已启用；本次启动将跳过仓库更新");
     }
