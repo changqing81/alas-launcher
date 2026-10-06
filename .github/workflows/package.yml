@@ -176,6 +176,10 @@ jobs:
             docker exec -w /volume -t $container_id yum install -y --disablerepo='*epel*' gettext perl-IPC-Cmd perl-Digest-SHA
             docker exec -w /volume -t $container_id pipx install conan
             docker exec -w /volume -t $container_id conan profile detect --force
+            # conan 源码走 ftp.gnu.org/ftpmirror.gnu.org，GitHub runner 容器内曾整段
+            # Network is unreachable（3.0.3 两连败同因）。配上 backup-urls：GNU 官方
+            # 源下载失败时自动改走路径结构相同的镜像（kernel.org / uwaterloo）。
+            docker exec -w /volume -t $container_id bash -c 'mkdir -p ~/.conan2 && printf "%s\n" "core.download:backup-urls=[[\"https://ftp.gnu.org/gnu/*\", \"https://mirrors.kernel.org/gnu/*\"], [\"https://ftpmirror.gnu.org/gnu/*\", \"https://mirrors.kernel.org/gnu/*\"], [\"https://ftp.gnu.org/gnu/*\", \"https://mirror.csclub.uwaterloo.ca/gnu/*\"], [\"https://ftpmirror.gnu.org/gnu/*\", \"https://mirror.csclub.uwaterloo.ca/gnu/*\"]]" > ~/.conan2/global.conf'
             docker exec -w /volume -t $container_id conan install . --build=missing --build="m4*"
             docker exec -w /volume -t $container_id make configure
             docker exec -w /volume -t $container_id bash -c 'source conanbuild.sh; \
