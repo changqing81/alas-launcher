@@ -601,15 +601,15 @@ jobs:
           PY
       - name: Push manifest and payloads to the dist branch
         # 国内分发通道：把清单与安装包推到一个专门的 dist 分支（单 commit
-        # force push，git 历史不膨胀）。gitcode 镜像仓库在平台侧同步该分支后，
-        # 国内客户从 gitcode 拉清单与安装包，全程不依赖 GitHub 直连。
+        # force push，git 历史不膨胀）。gitcode 侧同步后国内客户从 gitcode
+        # 拉清单与安装包，全程不依赖 GitHub 直连。
         # 失败不阻断发版（GitHub 通道仍然可用）。
         continue-on-error: true
         env:
           TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          ORIGIN_URL=$(git remote get-url origin)
           work=$(mktemp -d)
           cp -r launcher-updater/. "$work"/
           cd "$work"
@@ -618,8 +618,38 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A -f
           git commit -qm "dist: $TAG"
-          git push -q --force "$ORIGIN_URL" HEAD:dist
+          # 显式内嵌 workflow token：临时目录的仓库没有 checkout 注入的凭据配置
+          git push -q --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            HEAD:dist
           echo "dist branch pushed: $TAG"
+      - name: Mirror dist to GitCode (CN channel)
+        # 把同一份产物镜像到 gitcode 仓库的 dist 分支：国内客户由
+        # LAUNCHER_UPDATE_CN_URL 直接从这里取清单与安装包，无需代理。
+        # 需要 GITCODE_TOKEN（未配置则跳过，不阻断发版）。
+        continue-on-error: true
+        env:
+          TAG: ${{ github.ref_name }}
+          # 兼容两种密钥命名（GitHub 密钥名大小写敏感）
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN || secrets.gitcode }}
+        run: |
+          set -e
+          if [ -z "$GITCODE_TOKEN" ]; then
+            echo "GITCODE_TOKEN not set, skip GitCode mirror"
+            exit 0
+          fi
+          work=$(mktemp -d)
+          cp -r launcher-updater/. "$work"/
+          cd "$work"
+          git init -q -b dist
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -f
+          git commit -qm "dist: $TAG"
+          git push -q --force \
+            "https://gcw_BYvq9jGu:${GITCODE_TOKEN}@gitcode.com/gcw_BYvq9jGu/alas-launcher.git" \
+            HEAD:refs/heads/dist
+          echo "GitCode dist branch pushed: $TAG"
       - name: Publish manifest to main as a fallback channel
         # 兜底通路：主地址( release 资产 )不可用时可从 raw 拉到清单。
         # 分支保护可能拦住这次 push，因此不让它影响发版。
