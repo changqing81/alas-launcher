@@ -5,6 +5,9 @@ use base64::{prelude::BASE64_STANDARD, Engine};
 const MTLS_IDENTITY_ENV: &str = "ALAS_LAUNCHER_MTLS_IDENTITY_PEM_B64";
 const REQUIRE_MTLS_ENV: &str = "REQUIRE_LAUNCHER_MTLS_IDENTITY";
 const LAUNCHER_UPDATE_URL_ENV: &str = "LAUNCHER_UPDATE_URL";
+// 烘焙开关经由 main.rs 的 option_env! 生效；声明 rerun 才能让 env 变化触发重编，
+// 否则先跑过一次不带 env 的编译后，再带 env 构建会被指纹跳过，烘焙悄悄失活。
+const AUTO_UPDATE_DISABLED_ENV: &str = "AZURPILOT_LAUNCHER_NO_AUTO_UPDATE";
 // 启动器自更新清单地址。指向自有仓库的 GitHub Release。
 // releases/latest/download/ 的语义是「最新正式发布的那个版本」，URL 永久不变，
 // 而清单内容随每个 tag 更新 —— 正好满足「编译进二进制的地址必须固定」的要求。
@@ -48,6 +51,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed={MTLS_IDENTITY_ENV}");
     println!("cargo:rerun-if-env-changed={REQUIRE_MTLS_ENV}");
     println!("cargo:rerun-if-env-changed={LAUNCHER_UPDATE_URL_ENV}");
+    println!("cargo:rerun-if-env-changed={AUTO_UPDATE_DISABLED_ENV}");
 
     let launcher_update_url = env::var(LAUNCHER_UPDATE_URL_ENV)
         .ok()
