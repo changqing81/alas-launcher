@@ -1,0 +1,23 @@
+{
+  "version": "3.0.4",
+  "pub_date": "2026-10-06T13:42:25.774728Z",
+  "notes": "Launcher auto update 3.0.4",
+  "platforms": {
+    "darwin-aarch64": {
+      "url": "https://gitcode.com/api/v5/repos/gcw_BYvq9jGu/alas-launcher/raw/alas-launcher-darwin-aarch64?ref=dist",
+      "sha256": "508cc5c85c6f35186234442a2e081bd6db8524e0a3bc2432eecdbeb68286cbad"
+    },
+    "linux-x86_64": {
+      "url": "https://gitcode.com/api/v5/repos/gcw_BYvq9jGu/alas-launcher/raw/alas-launcher-linux-x86_64?ref=dist",
+      "sha256": "a28b27bd9f04c6a9a04f85360e9541969094474f095856f5afd749ff9f9ac7e7"
+    },
+    "windows-aarch64": {
+      "url": "https://gitcode.com/api/v5/repos/gcw_BYvq9jGu/alas-launcher/raw/alas-launcher-windows-aarch64.exe?ref=dist",
+      "sha256": "38fcfb69697e58c580bc7b33537397c48a5f3c60b55a31a6cbb7ac6e616224b4"
+    },
+    "windows-x86_64": {
+      "url": "https://gitcode.com/api/v5/repos/gcw_BYvq9jGu/alas-launcher/raw/alas-launcher-windows-x86_64.exe?ref=dist",
+      "sha256": "6c4bde5ae6f102b84eeae5e93bf0acc16b4be9f90e30dd11619fb0ec440056fc"
+    }
+  }
+}
