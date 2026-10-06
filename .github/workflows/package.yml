@@ -547,9 +547,17 @@ jobs:
                   "platforms": platforms,
               }
 
+          def cn_url_of(name):
+              # dist 分支只承载 Windows 两个包（国内用户绝大多数是 Windows，
+              # 全平台 480MB 跨境上传过慢且无法按平台分批推送）；其余平台
+              # 回退 GitHub release 资产，保证清单里每个平台都有条目。
+              if "windows" in name:
+                  return f"{gitcode_raw}/{name}?ref=dist"
+              return f"{github_base}/{name}"
+
           manifests = {
               "stable.json": build(lambda name: f"{github_base}/{name}"),
-              "stable-cn.json": build(lambda name: f"{gitcode_raw}/{name}?ref=dist"),
+              "stable-cn.json": build(cn_url_of),
           }
           for name, manifest in manifests.items():
               (root / name).write_text(
@@ -611,7 +619,10 @@ jobs:
         run: |
           set -e
           work=$(mktemp -d)
-          cp -r launcher-updater/. "$work"/
+          # dist 只承载双清单与 Windows 两个包：全平台 480MB 跨境上传过慢，
+          # 且 git push 无法按平台分批；Windows 覆盖国内绝大多数用户。
+          cp launcher-updater/stable.json launcher-updater/stable-cn.json "$work"/
+          cp launcher-updater/alas-launcher-windows-*.exe "$work"/
           cd "$work"
           git init -q -b dist
           git config user.name "github-actions[bot]"
@@ -639,7 +650,10 @@ jobs:
             exit 0
           fi
           work=$(mktemp -d)
-          cp -r launcher-updater/. "$work"/
+          # dist 只承载双清单与 Windows 两个包：全平台 480MB 跨境上传过慢，
+          # 且 git push 无法按平台分批；Windows 覆盖国内绝大多数用户。
+          cp launcher-updater/stable.json launcher-updater/stable-cn.json "$work"/
+          cp launcher-updater/alas-launcher-windows-*.exe "$work"/
           cd "$work"
           git init -q -b dist
           git config user.name "github-actions[bot]"
