@@ -2287,7 +2287,9 @@ fn main() -> Result<()> {
                             )),
                         );
 
-                        if !preview_no_update {
+                        // 烘焙常量放最左：false && X 在编译期即死，自更新链路（含闭包捕获）
+                        // 被 LLVM 彻底移除，二进制里不再有更新检查代码——这是烘焙生效的机械铁证。
+                        if !AUTO_UPDATE_DISABLED_BY_BUILD && !preview_no_update {
                             let launcher_progress = Cell::new(0u8);
                             let mut launcher_status_updater = |mut update: SplashUpdate| {
                                 update.progress = update.progress.max(launcher_progress.get());
