@@ -168,7 +168,7 @@ jobs:
             AutotoolsToolchain
             PkgConfigDeps
             CONANFILE
-            container_id=$(docker run -d -v $PWD:/volume --rm -t quay.io/pypa/manylinux2010_x86_64:latest)
+            container_id=$(docker run -d --network host -v $PWD:/volume --rm -t quay.io/pypa/manylinux2010_x86_64:latest)
             # manylinux2010 基于 CentOS 6，其 EPEL 6 仓库已下线
             # （archives.fedoraproject.org/.../epel/6/repodata/repomd.xml 返回 404），
             # yum 只要碰到失效仓库就会整体报错退出。gettext/perl-IPC-Cmd/perl-Digest-SHA
@@ -176,10 +176,11 @@ jobs:
             docker exec -w /volume -t $container_id yum install -y --disablerepo='*epel*' gettext perl-IPC-Cmd perl-Digest-SHA
             docker exec -w /volume -t $container_id pipx install conan
             docker exec -w /volume -t $container_id conan profile detect --force
-            # conan 源码走 ftp.gnu.org/ftpmirror.gnu.org，GitHub runner 容器内曾整段
-            # Network is unreachable（3.0.3 两连败同因）。配上 backup-urls：GNU 官方
-            # 源下载失败时自动改走路径结构相同的镜像（kernel.org / uwaterloo）。
-            docker exec -w /volume -t $container_id bash -c 'mkdir -p ~/.conan2 && printf "%s\n" "core.download:backup-urls=[[\"https://ftp.gnu.org/gnu/*\", \"https://mirrors.kernel.org/gnu/*\"], [\"https://ftpmirror.gnu.org/gnu/*\", \"https://mirrors.kernel.org/gnu/*\"], [\"https://ftp.gnu.org/gnu/*\", \"https://mirror.csclub.uwaterloo.ca/gnu/*\"], [\"https://ftpmirror.gnu.org/gnu/*\", \"https://mirror.csclub.uwaterloo.ca/gnu/*\"]]" > ~/.conan2/global.conf'
+            # runner 容器对 ftp.gnu.org 曾整段 Network is unreachable（3.0.3 三连败同因）。
+            # 两阶段装载：graph info 只缓存配方不下载源码，随后把配方里的 GNU 源改成
+            # kernel.org 镜像（路径结构一致），conan install 的源码下载即从镜像走。
+            docker exec -w /volume -t $container_id conan graph info . --build=missing --build="m4*"
+            docker exec -w /volume -t $container_id bash -c 'grep -rl "ftp.gnu.org" ~/.conan2/p/ 2>/dev/null | xargs -r sed -i "s|https://ftpmirror.gnu.org/gnu|https://mirrors.kernel.org/gnu|g; s|https://ftp.gnu.org/gnu|https://mirrors.kernel.org/gnu|g"'
             docker exec -w /volume -t $container_id conan install . --build=missing --build="m4*"
             docker exec -w /volume -t $container_id make configure
             docker exec -w /volume -t $container_id bash -c 'source conanbuild.sh; \
