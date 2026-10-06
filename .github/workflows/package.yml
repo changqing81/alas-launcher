@@ -499,6 +499,7 @@ jobs:
           from pathlib import Path
 
           repo = os.environ["REPO"].strip("/")
+          tag = os.environ["TAG"].strip()
           version = os.environ["VERSION"].strip()
           if version.startswith("v"):
               version = version[1:]
@@ -506,7 +507,10 @@ jobs:
           # release 资产下载 URL 里的那一段必须等于 tag 本身。
           # 本仓库的 tag 不带 v 前缀，早先这里硬编码补了 "v"，
           # 导致 3.0.0 的整份清单指向 /download/v3.0.0/... → 404，自更新直接不可用。
-          base_url = f"https://github.com/{repo}/releases/download/{os.environ['TAG'].strip()}"
+          github_base = f"https://github.com/{repo}/releases/download/{tag}"
+          # 国内清单：清单与安装包都放 gitcode 镜像仓库的 dist 分支
+          # （API raw 匿名可读），该分支由 gitcode 平台从 GitHub 同步。
+          gitcode_raw = "https://gitcode.com/api/v5/repos/gcw_BYvq9jGu/alas-launcher/raw"
 
           root = Path("launcher-updater")
           files = sorted(
@@ -516,37 +520,50 @@ jobs:
           if not files:
               raise SystemExit("No launcher payloads found in launcher-updater/")
 
-          platforms = {}
-          for file_path in files:
-              name = file_path.name
-              key = name[len("alas-launcher-"):]
-              if key.endswith(".exe"):
-                  key = key[:-4]
-              platforms[key] = {
-                  # 资产名必须与实际上传的文件名完全一致
-                  # （例如 alas-launcher-windows-x86_64.exe），否则这里会指向 404。
-                  "url": f"{base_url}/{name}",
-                  "sha256": hashlib.sha256(file_path.read_bytes()).hexdigest(),
+          pub_date = (
+              datetime.datetime.now(datetime.timezone.utc)
+              .isoformat()
+              .replace("+00:00", "Z")
+          )
+
+          def build(url_of):
+              platforms = {}
+              for file_path in files:
+                  name = file_path.name
+                  key = name[len("alas-launcher-"):]
+                  if key.endswith(".exe"):
+                      key = key[:-4]
+                  platforms[key] = {
+                      # 资产名必须与实际上传的文件名完全一致
+                      # （例如 alas-launcher-windows-x86_64.exe），否则这里会指向 404。
+                      "url": url_of(name),
+                      "sha256": hashlib.sha256(file_path.read_bytes()).hexdigest(),
+                  }
+              return {
+                  "version": version,
+                  "pub_date": pub_date,
+                  "notes": f"Launcher auto update {version}",
+                  "platforms": platforms,
               }
 
-          manifest = {
-              "version": version,
-              "pub_date": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
-              "notes": f"Launcher auto update {version}",
-              "platforms": platforms,
+          manifests = {
+              "stable.json": build(lambda name: f"{github_base}/{name}"),
+              "stable-cn.json": build(lambda name: f"{gitcode_raw}/{name}?ref=dist"),
           }
-          (root / "stable.json").write_text(
-              json.dumps(manifest, ensure_ascii=False, indent=2),
-              encoding="utf-8",
-          )
-          print(json.dumps(manifest, ensure_ascii=False, indent=2))
+          for name, manifest in manifests.items():
+              (root / name).write_text(
+                  json.dumps(manifest, ensure_ascii=False, indent=2),
+                  encoding="utf-8",
+              )
+              print(f"== {name}")
+              print(json.dumps(manifest, ensure_ascii=False, indent=2))
           PY
       - name: Upload manifest and payloads to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release upload "$TAG" launcher-updater/stable.json launcher-updater/alas-launcher-* --clobber
+          gh release upload "$TAG" launcher-updater/stable.json launcher-updater/stable-cn.json launcher-updater/alas-launcher-* --clobber
       - name: Verify launcher update URLs are reachable
         # 清单里的 URL 是启动器自更新的唯一依据，404 会让所有用户自更新直接失败。
         # 这里逐个发一次 Range 请求，发布后立刻验证，坏了就红灯。
@@ -581,6 +598,27 @@ jobs:
           if failed:
               sys.exit("Unreachable launcher update URLs: " + ", ".join(failed))
           PY
+      - name: Push manifest and payloads to the dist branch
+        # 国内分发通道：把清单与安装包推到一个专门的 dist 分支（单 commit
+        # force push，git 历史不膨胀）。gitcode 镜像仓库在平台侧同步该分支后，
+        # 国内客户从 gitcode 拉清单与安装包，全程不依赖 GitHub 直连。
+        # 失败不阻断发版（GitHub 通道仍然可用）。
+        continue-on-error: true
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          ORIGIN_URL=$(git remote get-url origin)
+          work=$(mktemp -d)
+          cp -r launcher-updater/. "$work"/
+          cd "$work"
+          git init -q -b dist
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -f
+          git commit -qm "dist: $TAG"
+          git push -q --force "$ORIGIN_URL" HEAD:dist
+          echo "dist branch pushed: $TAG"
       - name: Publish manifest to main as a fallback channel
         # 兜底通路：主地址( release 资产 )不可用时可从 raw 拉到清单。
         # 分支保护可能拦住这次 push，因此不让它影响发版。
@@ -588,8 +626,9 @@ jobs:
         run: |
           mkdir -p updata
           cp launcher-updater/stable.json updata/stable.json
+          cp launcher-updater/stable-cn.json updata/stable-cn.json
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add updata/stable.json
+          git add updata/stable.json updata/stable-cn.json
           git commit -m "ci: update updata/stable.json [skip ci]" || echo "no changes to commit"
           git push origin HEAD:main

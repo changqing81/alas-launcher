@@ -87,6 +87,11 @@ const TIME_BOMB_CONFIG_SOURCE: &str = include_str!("../Cargo.toml");
 #[cfg(test)]
 const TAURI_CONFIG_SOURCE: &str = include_str!("../tauri.conf.json");
 const LAUNCHER_UPDATE_URL: &str = env!("LAUNCHER_UPDATE_URL");
+// 国内首选清单：gitcode 镜像仓库 dist 分支（CI 随发版推送，gitcode 同步后
+// 国内直达、无需代理）。清单内的下载地址同样指向 gitcode，国内客户
+// 查更新与下载全链路不碰 GitHub。
+const LAUNCHER_UPDATE_CN_URL: &str =
+    "https://gitcode.com/api/v5/repos/gcw_BYvq9jGu/alas-launcher/raw/stable-cn.json?ref=dist";
 // 兜底清单地址：主地址（release 资产）取不到时再试这个。
 // 由 CI 在发版时把 stable.json 一并提交回 main 分支，作为冗余通路。
 const LAUNCHER_UPDATE_FALLBACK_URL: &str =
@@ -515,7 +520,11 @@ fn launcher_update_http_client(
 fn fetch_launcher_update_manifest(client: &Client) -> Result<LauncherUpdateManifest> {
     fetch_launcher_update_manifest_from_urls(
         client,
-        &[LAUNCHER_UPDATE_URL, LAUNCHER_UPDATE_FALLBACK_URL],
+        &[
+            LAUNCHER_UPDATE_CN_URL,
+            LAUNCHER_UPDATE_URL,
+            LAUNCHER_UPDATE_FALLBACK_URL,
+        ],
     )
 }
 
